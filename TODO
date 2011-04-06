@@ -1,0 +1,6 @@
+* Traducir al inglés
+* Añadir posibilidad de:
+  * Eliminar ficheros (syntaxis -fichero)
+  * Añadir ficheros (syntaxis +fichero)
+  * Reemplazar ficheros (syntaxis fichero)
+
