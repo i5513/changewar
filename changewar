@@ -1,0 +1,766 @@
+#!/usr/bin/perl
+# Modificamos ficheros guiando nos de un fichero de configuracion
+# changewar archivo.conf origen.zip destino.zip
+# Formato del fichero archivo.conf:
+# Fichero:propiedad01,propiedad02 # Las propiedades propiedad01 y propiedad02 serán copiadas de origen a destino
+# Fichero:propiedad01=xxxx,propiedad02=yyy # Las propiedades propiedad01 y propiedad02 serán asignadas en el destino
+# Fichero.xml: xpath:=valor, xpath
+# Ejemplo
+# es/sadesi/infosae/dao/cliente/ClienteDAONet.properties:host,puerto=2222
+# propiedades.xml: minodo[@nombre="nombre"]@atributo:=miatributo
+# TODO:
+# poder comentar propiedades
+# eliminar ficheros
+# copiar ficheros
+use Archive::Zip qw( :ERROR_CODES :CONSTANTS );
+use XML::XPath;
+use XML::XPath::XMLParser;
+use Getopt::Long;
+use Text::Iconv;
+use utf8;
+
+use strict;
+use warnings;
+
+# Opciones que se convierten en variables globales :(
+my $quietly="";
+my $dryrun="";
+my $debug="";
+my $separador=",";
+
+sub debug
+{
+	printf STDERR "@_" if (not $quietly);
+}
+
+sub ayuda
+{
+	my $nombre=$0;
+	$nombre=~s,.*/,,;
+	printf STDERR "Uso: $nombre [--separador=c|-sc] [--debug|-d] [--quietly|-q] [--dryrun|-n] archivo.conf origen.zip destino.zip\n";
+	printf STDERR "El parámetro debug creará un directorio tmp con ficheros originales y los modificados\n";
+	printf STDERR "El parámetro separador cambiará de , al valor indicado (poner entre comillas si es punto y coma\n";
+	exit (1);
+}
+
+sub convertir
+{
+	my $origen=shift;
+	my $destino=shift;
+	my $cad=shift;
+
+	my $convertidor=Text::Iconv->new ($origen,$destino);
+	my $d=$convertidor->convert ($cad);
+	return $d;
+}
+
+# Hack para ver si una cadena contiene caracteres iso8859-15
+sub comprobar_conversion
+{
+	my $origen=shift;
+	my $destino=shift;
+	my $cad=shift;
+
+	my $convertidor=Text::Iconv->new ($origen,$destino);
+	my $d=$convertidor->convert ($cad);
+	if (defined $d)
+	{
+		if ($cad eq $d)
+		{
+			return $d;
+		}
+		else
+		{
+			return undef;
+		}
+	}
+	return $d;
+}
+
+sub es_iso8859_15
+{
+        my $cad=shift;
+
+        my $utf8_utf8=comprobar_conversion("UTF-8","UTF-8",$cad);
+        my $iso_iso=comprobar_conversion("ISO8859-15","ISO8859-15",$cad);
+
+
+        if (not defined $utf8_utf8  and defined $iso_iso)
+        {
+                return 1;
+        }
+        else
+        {
+                return undef;
+        }
+}
+
+sub es_utf8
+{
+        my $cad=shift;
+
+        my $utf8_utf8=comprobar_conversion("UTF-8","UTF-8",$cad);
+        my $iso_iso=comprobar_conversion("ISO8859-15","ISO8859-15",$cad);
+
+        if ( defined $utf8_utf8 and defined $iso_iso )
+        {
+                return 1;
+        }
+        else
+        {
+                return undef;
+        }
+}
+
+
+
+sub cargar_configuracion
+{
+	my $fichero=shift;
+	my %conf;
+
+	open CONF, "<$fichero" || die "No puedo abrir $fichero";
+	while (<CONF>)
+	{
+		# Pasamos si es un comentario
+		next if (/^\s*#/);
+		if (/^([^:]*):(.+)$/)
+		{
+			debug "Procesando: $_";
+			my $fichero=$1;
+			my $definicion=$2;
+			$definicion=~s/\s*//g;
+			my @props=split ("$separador",$definicion);
+			if ($fichero =~ /.xml/)
+			{
+				foreach my $prop (@props)
+				{
+					if ($prop !~ /:=/)
+					{
+						$conf{$fichero}{copia}{$prop}="";
+					}
+					else
+					{
+						my ($p,$v) = ($prop =~ /^(.*):=(.*)$/);
+						if (es_iso8859_15 ($v))
+						{
+							$v=convertir ("ISO8859-15","UTF-8",$v);
+						}
+						$conf{$fichero}{valor}{$p}=$v;
+					}
+				}
+			}
+			elsif ($fichero =~ /.properties/)
+			{
+				foreach my $prop (@props)
+				{
+					# Podríamos añadir una syntaxis como propiedad/d 
+					# para eliminar la propiedad ...
+					if ($prop !~ /=/)
+					{
+						#definimos la propiedad a copiar
+						$conf{$fichero}{copia}{$prop}="";
+					}
+					else
+					{
+						my ($p,$v) = ($prop =~ /^([^=]*)=(.*)$/);
+						if (es_iso8859_15 ($v))
+						{
+							$v=convertir ("ISO8859-15","UTF-8",$v);
+						}
+						$conf{$fichero}{valor}{$p}=$v;
+					}
+				}
+			}
+		}
+	}
+	return %conf;
+}
+
+sub imprimir_configuracion
+{
+	my $conf=shift;
+	
+	foreach my $fichero (keys %{$conf})
+	{
+		debug "Fichero: $fichero:\n";
+		debug "Propiedades a copiar:\n";
+		foreach my $prop (keys %{$conf->{$fichero}{copia}})
+		{
+			debug "* $prop\n";
+		}
+		debug "Propiedades a asignar:\n";
+		foreach my $prop (keys %{$conf->{$fichero}{valor}})
+		{
+			debug "* $prop = $conf->{$fichero}{valor}{$prop}\n";
+		}
+	}
+}
+
+sub copiar_configuracion
+{
+	my $conf=shift;
+	my %copia;
+	
+	foreach my $fichero (keys %{$conf})
+	{
+		foreach my $prop (keys %{$conf->{$fichero}{copia}})
+		{
+			$copia{$fichero}{copia}{$prop}="";
+		}
+		foreach my $prop (keys %{$conf->{$fichero}{valor}})
+		{
+			$copia{$fichero}{valor}{$prop}=$conf->{$fichero}{valor}{$prop};
+		}
+	}
+	return %copia;
+}
+
+sub procesar_propiedades_properties
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $fichero_origen=$zip->contents($fichero);
+	my $conf=shift;
+	my $cambios=shift;
+
+	debug "Propiedades de $fichero\n";
+	foreach my $prop (keys %{$conf->{$fichero}{copia}})
+	{
+		my ($valor) = ($fichero_origen =~ /^\s*$prop\s*=(.*)$/m);
+		if (not defined ($valor))
+		{
+			debug "FALLO en $prop (no existe en $fichero), Contenido del fichero $fichero:\n ($fichero_origen)\n";
+			exit (1);
+		}
+		$cambios->{$fichero}{valor}{$prop}=$valor;
+		delete $cambios->{$fichero}{copia}{$prop};
+	}
+}
+
+sub procesar_propiedades_xml
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $conf=shift;
+	my $cambios=shift;
+
+	my $contenido=$zip->contents($fichero);
+	if (defined $cambios->{$fichero}{"ISO8859-15"})
+	{
+		debug "Convirtiendo $fichero a UTF-8 ...\n";
+		$contenido=convertir ("ISO8859-15","UTF-8",$zip->contents($fichero));
+	}
+
+	my $xp = XML::XPath->new (xml => $contenido);
+	foreach my $prop (keys %{$conf->{$fichero}{copia}})
+	{
+		# Habría que ver qué tiene prop y adecuarlo ... o hacer que venga ya adecuado ...
+		my @nodos=$xp->findnodes($prop);
+		if (scalar (@nodos) gt 1)
+		{
+			die "Se encontraron más de un nodo con XPATH $prop: \n".
+			" ($contenido)\n REVISA SALIDA DE LOGS (fallo en $fichero:$prop)\n";
+		}
+		elsif (scalar (@nodos) eq 0)
+		{
+			die "No se encontró ningún nodo con XPATH $prop: \n".
+			" ($contenido)\n REVISA SALIDA DE LOGS (fallo en $fichero:$prop)\n"
+		}
+		my $valor=$xp->getNodeText ($prop);
+		if (not defined ($valor))
+		{
+			die "FALLO en $prop. No se encuentra ese XPATH en $fichero:\n".
+			" ($contenido)\n REVISA SALIDA DE LOGS (fallo en $fichero:$prop)\n";
+		}
+		$cambios->{$fichero}{valor}{$prop}=$valor;
+		delete  $cambios->{$fichero}{copia}{$prop};
+				
+	}
+}
+
+sub procesar_propiedades
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $conf=shift;
+	my $cambios=shift;
+
+	if ($fichero =~ /.properties/)
+	{
+		procesar_propiedades_properties ($zip, $fichero, $conf, $cambios);
+	}
+	elsif ($fichero =~ /.xml/)
+	{
+		procesar_propiedades_xml ($zip, $fichero, $conf, $cambios);
+	}
+	else
+	{
+		die "Tipo de fichero desconocido ($fichero)";
+	}
+}
+
+sub recoger_info
+{
+	my $conf=shift;
+	my $origen=shift;
+	
+	my %cambios=copiar_configuracion($conf);
+	my $zip=Archive::Zip->new();
+	unless ( $zip->read( $origen  ) == AZ_OK ) {
+              die "No puedo leer fichero origen $origen";
+        }
+		
+	foreach my $fichero (keys %{$conf})
+	{
+		if (defined ($zip->memberNamed($fichero)))
+		{
+			my $contenido=$zip->contents($fichero);
+			my $encoding;
+			if (es_iso8859_15 ($contenido))
+			{
+				$encoding="ISO8859-15";
+				$cambios{$fichero}{"ISO8859-15"}=1;
+			}
+			elsif (es_utf8 ($contenido))
+			{
+				$encoding="UTF-8";
+				$cambios{$fichero}{"UTF-8"}=1;
+			}
+			else
+			{
+				die "Codificación del fichero $fichero desconocida";
+			}
+			debug "Fichero $fichero ($encoding) OK\n";
+			procesar_propiedades ($zip,$fichero,$conf,\%cambios);
+		}
+		else
+		{
+			debug "Falla fichero $fichero\n";
+		}
+	}
+	return %cambios;
+}
+
+sub comprobar_propiedad_xml
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $prop=shift;
+
+	my $contenido=$zip->contents($fichero);
+
+	# No nos llega los cambios aquí ....
+	if (es_iso8859_15 ($contenido))
+	{
+		debug "Convirtiendo $fichero en fichero destino de iso8859-15 a utf8";
+		$contenido=convertir ("ISO8859-15","UTF-8",$contenido);
+		$zip->contents($fichero,$contenido);
+		$zip->overwrite();
+	}
+	
+	my $xp=XML::XPath->new (xml => $contenido);
+	my @nodos=$xp->findnodes($prop);
+	
+	if (scalar (@nodos) gt 1)
+	{
+		die "Se encontraron más de un nodo con XPATH $prop: \n".
+		" ($contenido)\n REVISA SALIDA DE LOGS (fallo en zip destino: $fichero:$prop)\n";
+	}
+	elsif (scalar (@nodos) eq 0)
+	{
+		die "No se encontró ningún nodo con XPATH $prop: \n".
+		" ($contenido)\n REVISA SALIDA DE LOGS (fallo en zip destino: $fichero:$prop)\n"
+	}
+	my $valor=$xp->getNodeText ($prop);
+	if (not defined ($valor))
+	{
+		die "FALLO en $prop. No se encuentra ese XPATH en $fichero:\n".
+		" ($contenido)\n REVISA SALIDA DE LOGS (fallo en zip destino: $fichero:$prop)\n";
+	}
+}
+
+sub comprobar_propiedad_properties
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $prop=shift;
+
+	my $fichero_origen=$zip->contents($fichero);
+	if (not defined ($fichero_origen))
+	{
+		die "FALLO en $fichero. No puedo leer el contenido\n";
+	}
+	my ($valor) = ($fichero_origen =~ /^\s*$prop\s*=(.*)$/m);
+	
+	if (not defined ($valor))
+	{
+		die "FALLO en  $prop, Contenido del fichero $fichero:\n ($fichero_origen)\n".
+		"(fallo en zip destino: $fichero:$prop)\n";
+	}
+}
+
+sub comprobar_propiedad
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $prop=shift;
+
+	if ($fichero =~ /\.xml/)
+	{
+		comprobar_propiedad_xml ($zip,$fichero,$prop);
+	}
+	elsif ($fichero =~ /\.properties/)
+	{
+		comprobar_propiedad_properties ($zip,$fichero,$prop);
+	}
+}
+
+sub comprobar_cambios_fichero
+{
+	my $destino= shift;
+	my $fichero=shift;
+	my $cambios=shift;
+
+	my $zip=Archive::Zip->new();
+	unless ( $zip->read( $destino  ) == AZ_OK ) {
+              die "No puedo leer fichero destino $destino";
+        }
+
+	my @propiedades=keys %{$cambios->{$fichero}{valor}};
+	foreach my $prop (@propiedades)
+	{
+		debug "Comprobando $destino, $fichero, $prop ....\n";
+		comprobar_propiedad ($zip, $fichero, $prop);
+	}
+}
+
+sub comprobar_cambios
+{
+	my $cambios=shift;
+	my $destino=shift;
+
+	debug "Comprobando cambios ...\n";
+	foreach my $fichero (keys %{$cambios})
+	{
+		if (defined $cambios->{$fichero}{copia})
+		{
+			die "No se pudieron copiar todos los campos (ESTO NO DEBERIA SALIR)." if (keys %{$cambios->{$fichero}{copia}} gt 0);
+			comprobar_cambios_fichero ($destino, $fichero, $cambios);
+		}
+	}
+	
+}
+
+sub aplicar_cambios_fichero
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $cambios=shift;
+
+	if ($fichero =~ /\.xml/)
+	{
+		aplicar_cambios_xml ($zip,$fichero,$cambios);
+	}
+	elsif ($fichero =~ /\.properties/)
+	{
+		aplicar_cambios_properties ($zip,$fichero,$cambios);
+	}
+	
+}
+sub aplicar_cambios_properties 
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $cambios=shift;
+	
+	foreach my $prop (keys %{$cambios->{$fichero}{valor}})
+	{
+		debug  "Aplicando cambio $fichero, $prop, $cambios->{$fichero}{valor}{$prop}\n";
+		aplicar_cambio_properties ($zip, $fichero, $prop, $cambios->{$fichero}{valor}{$prop}) if (not $dryrun);
+	}
+}
+
+sub aplicar_cambio_properties 
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $prop=shift;
+	my $valor=shift;
+
+	my $fichero_body=$zip->contents($fichero);
+	$fichero_body=~s/^(\s*$prop\s*=)(.*)$/$1${valor}/m;
+	$fichero_body=~s///gm;
+
+	$zip->contents($fichero,$fichero_body);
+	
+}
+
+sub aplicar_cambios_xml
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $cambios=shift;
+
+	foreach my $prop (keys %{$cambios->{$fichero}{valor}})
+	{
+		debug "Aplicando cambio xml ,$fichero, $prop, $cambios->{$fichero}{valor}{$prop}\n";
+		aplicar_cambio_xml ($zip, $fichero, $prop, $cambios) if (not $dryrun);
+	}
+}
+
+sub aplicar_cambio_xml
+{
+	my $zip=shift;
+	my $fichero=shift;
+	my $prop=shift;
+	my $cambios=shift;
+
+	my $valor=$cambios->{$fichero}{valor}{$prop};
+
+	my $contenido=$zip->contents($fichero);
+
+	if (defined $cambios->{$fichero}{"ISO8859-15"})
+	{
+		debug "Convirtiendo $fichero de ISO8859-15 a UTF-8\n";
+		$contenido=convertir ("ISO8859-15","UTF-8",$zip->contents($fichero));
+	}
+
+	my $xp=XML::XPath->new (xml => $contenido);
+	my @nodos=$xp->findnodes($prop);
+	
+	if (scalar (@nodos) gt 1)
+	{
+		die "Se encontraron más de un nodo con XPATH $prop: \n".
+		" ($contenido)\n REVISA SALIDA DE LOGS (fallo en zip destino: $fichero:$prop)\n";
+	}
+	elsif (scalar (@nodos) eq 0)
+	{
+		die "No se encontró ningún nodo con XPATH $prop: \n".
+		" ($contenido)\n REVISA SALIDA DE LOGS (fallo en zip destino: $fichero:$prop)\n"
+	}
+	$xp->setNodeText ($prop,$valor);
+	my $xml=$xp->findnodes_as_string("/");
+	# Bug 66780 en rt.cpan.org
+	$xml =~ s/-->(.)/-->\n$1/m if ($xml =~ /^<!--/);
+	if (defined $cambios->{$fichero}{"ISO8859-15"})
+	{
+		debug "Dejamos el fichero $fichero como venía (con codificación ISO8859-15)\n";
+		$xml=convertir ("UTF-8","ISO8859-15",$xml);
+	}	
+	$zip->contents($fichero,$xml."\n");
+}
+
+sub aplicar_cambios
+{
+	my $cambios=shift;
+	my $destino=shift;
+	
+	my $zip=Archive::Zip->new();
+	unless ( $zip->read( $destino  ) == AZ_OK ) {
+              die "No puedo leer fichero destino $destino";
+        }
+	debug "Aplicando cambios ... \n";
+
+	foreach my $fichero (keys %{$cambios})
+	{
+		aplicar_cambios_fichero ($zip, $fichero, $cambios); 
+	}
+	$zip->overwrite() if (not $dryrun);
+}
+
+sub escribir_ficheros_modificados
+{
+	my $cambios=shift;
+	my $origen=shift;
+	my $destino=shift;
+
+	my $zip_origen=Archive::Zip->new();
+	unless ($zip_origen->read($origen) == AZ_OK)
+	{
+		die "No puedo leer origen para obtener ficheros origen";
+	}
+	my $zip_destino=Archive::Zip->new();
+	unless ($zip_destino->read($destino) == AZ_OK)
+	{
+		die "No puedo leer origen para obtener ficheros origen";
+	}
+	foreach my $fichero (keys %{$cambios})
+	{
+		debug "Descomprimiendo $fichero\n";
+		my $nombre=$fichero;
+		$nombre=~ s,^.*/,,;
+		$zip_origen->extractMemberWithoutPaths($fichero,"tmp-$destino/$nombre-origen");
+		$zip_destino->extractMemberWithoutPaths($fichero,"tmp-$destino/$nombre-destino");
+	}
+}
+
+Getopt::Long::Configure ("bundling");
+
+my $result = GetOptions ("quietly|q" => \$quietly,
+	"dryrun|n" => \$dryrun,
+	"debug|d" => \$debug,
+	"separador|s=s" => \$separador);
+
+if (not $result or length ($separador) ne 1)
+{
+	ayuda ();
+}
+if ( $#ARGV ne 2 )
+{
+	ayuda ();
+}
+
+my $fichero_conf=shift;
+my $origen=shift;
+my $destino=shift;
+
+debug "**************** LEYENDO CONFIGURACIÓN *******************************\n";
+my %conf=cargar_configuracion($fichero_conf);
+# imprimir_configuracion (\%conf);
+# %cambios será una copia de %conf pero con todos sus hijos de tipo "valor"
+my %cambios=recoger_info(\%conf,$origen);
+debug "************************** CONFIGURACION ****************************\n";
+imprimir_configuracion (\%conf) if (not $quietly);
+debug "************************** CAMBIOS ****************************\n" ;
+imprimir_configuracion (\%cambios) if (not $quietly);
+debug "************************** COMPROBANDO CAMBIOS ***********************************\n";
+comprobar_cambios (\%cambios,$destino);
+debug "************************** APLICANDO CAMBIOS ***********************************\n";
+aplicar_cambios (\%cambios, $destino);
+debug "************************** Escribiendo ficheros por modo debug ******************\n";
+escribir_ficheros_modificados(\%cambios, $origen, $destino) if ($debug);
+
+__END__
+
+=encoding utf8
+
+=head1 NAME
+
+changewar - Modificar ficheros dentro de un fichero zip (.war, .jar, ...)
+
+=head1 SIPNOSIS
+
+B<changewar [--separador=c|-sc] [--debug|-d] [--quietly|-q] [--dryrun|-n] archivo.conf origen.zip destino.zip >
+
+=head1 DESCRIPCIÓN
+
+B<changewar> permite modificar ficheros dentro de destino.zip, basándonos en la configuración indicada en archivo.conf y cogiendo los valores por defectos del origen.zip. Ver apartado SINTAXIS DE CONFIGURACIÓN para ver saber más de las posibilidades en archivo.conf.
+
+=head1 OPCIONES
+
+=head2 B<--debug|-d>
+
+Crea un directorio tmp en el directorio actual de trabajo en el que se guardaran los ficheros que se modifican durante el proceso.
+
+Los ficheros originales son renombrados a fichero-original y los que se generan son renombrados a fichero-destino. De tal forma podremos comparar los ficheros con una sencilla orden:
+
+for i in *origen; do vimdif $i ${i/origen/destino}; done
+
+=head2 B<--quietly|-q>
+
+Ser silencioso. Por defecto nos mostrará todo lo que se está haciendo.
+
+=head2 B<--dryrun|-n>
+
+No ejecutar, simplemente decir qué ocurriría de lanzar el script. Se puede usar para comprobar que el fichero de configuración es correcto y el esperado.
+
+=head2 B<--separador=c|-sc>
+
+Usar un separador alternativo por defecto el separador es la coma (",").
+
+=head1 SINTAXIS DE CONFIGURACIÓN
+
+Las líneas que empiecen con almoadilla ("#") serán consideradas comentarios.
+
+=head2 FICHEROS .properties
+
+# Configuración que copia la propiedad "prop" desde el fichero "fichero.properties" del origen.zip al mismo fichero dentro del destino.zip
+
+fichero.properties: prop
+
+# Configuración que asigna el valor "val" a la propiedad "prop" en el fichero "fichero.properties" dentro del destino.zip
+
+fichero.properties: prop=val
+
+# Se pueden mezclar separando las asignaciones por coma:
+
+fichero.properties: prop=val, prop2
+
+=head2 FICHEROS .xml
+
+Se usa la sintaxis XPATH (http://www.w3schools.com/xpath/default.asp) y se utiliza el := como operador de asignación.
+
+Daremos unos cuantos ejemplos basados en el siguiente ejemplo:
+
+<Comunidad nombre="Andalucia">
+
+<Provincia nombre="Sevilla" nombre_romano="hispalos">
+
+<Poblacion> 700000 </Poblacion>
+
+</Provincia>
+
+<Provincia nombre="Cádiz" nombre_romano="Gadir">
+
+<Poblacion> 100000 </Poblacion>
+
+</Provincia>
+
+</Comunidad>
+
+Para buscar un nodo se usan rutas que especifican el camino hasta dicho nodo. Por ejemplo: 
+
+/Comunidad/Provincia[@nombre="Sevilla"]/Poblacion
+
+Dentro del elemento Comunidad buscariamos una provincia con el atributo nombre a "Sevilla", una vez que estemos en ese nodo se accedería al atributo Población.
+
+Si queremos que la población de Sevilla sea de 1 millón de habitantes por que queremos meter a las proximidades:
+
+andalucia.xml: /Comunidad/Provincia[@nombre="Sevilla"]/Poblacion := 1000000
+
+Si nos hemos confundido y en vez de Cádiz queremos que sea Huelva la que tenga 100000 habitantes haremos:
+
+andalucia.xml: /Comunidad/Provincia[@nombre="Cádiz"]/@nombre := Huelva
+
+Vemos como la arroba "@" se usa para acceder a los atributos tanto para buscarlos como para acceder.
+
+Habitualmente podemos abreviar los caminos, la expresión // hará que se avance en el árbol hasta que se encuentre lo que le especifiquemos a continuación:
+
+andalucia.xml: //Provincia[@nombre=Sevilla]/Poblacion := 1000000
+
+Si nos hemos confundido a la hora de escribir el nombre romano de Sevilla, así podríamos solucionarlo:
+
+andalucia.xml: //Provincia[@nombre=Sevilla]/@nombre_romano := hispalis
+
+Si no asignamos valor a la propiedad ésta se copiará desde el fichero origen dentro de origen.zip
+
+=head1 BUGS
+
+El soporte a diferentes locales se haya limitado por la librería XML::XPath. Si el XML viene bien formado con su encoding correspondiente no habrá problema. Se ha hecho un apaño para que no den problemas los ficheros que vengan con carácteres ISO8859-15.
+
+Contactar con javibarroso@gmail.com para cualquier tipo de problemas.
+
+=head1 TODO
+
+* Poder eliminar ficheros
+
+* Poder copiar ficheros enteros
+
+=head1 VER TAMBIÉN
+
+L<XML::XPath>, L<Archive::Zip> , L<Text::Iconv>
+
+=head1 HISTORIA
+
+Se comenzó a desarrollar en Marzo de 2011 para facilitar la ardua tarea de modificaciones de .war, antes de la llegada del maven a nuestras oficinas
+
+=head1 LICENCIA
+
+GPL o superior (sería BSD si tuviese tiempo de copiar el copyright :P )
+
+=head1 DEDICATORIA
+
+A Marita ... :(
+
+=cut
