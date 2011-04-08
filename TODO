@@ -3,4 +3,4 @@
   * Eliminar ficheros (syntaxis -fichero)
   * Añadir ficheros (syntaxis +fichero)
   * Reemplazar ficheros (syntaxis fichero)
-
+* Permitir ficheros de configuración tipo .ini

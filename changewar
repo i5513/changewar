@@ -15,12 +15,14 @@
 use Archive::Zip qw( :ERROR_CODES :CONSTANTS );
 use XML::XPath;
 use XML::XPath::XMLParser;
+use XML::Parser;
 use Getopt::Long;
 use Text::Iconv;
 use utf8;
-
 use strict;
 use warnings;
+
+my $parser=new XML::Parser ( ParseParamEnt => "no" );
 
 # Opciones que se convierten en variables globales :(
 my $quietly="";
@@ -252,7 +254,7 @@ sub procesar_propiedades_xml
 		$contenido=convertir ("ISO8859-15","UTF-8",$zip->contents($fichero));
 	}
 
-	my $xp = XML::XPath->new (xml => $contenido);
+	my $xp = XML::XPath->new (xml => $contenido,parser => $parser);
 	foreach my $prop (keys %{$conf->{$fichero}{copia}})
 	{
 		# Habría que ver qué tiene prop y adecuarlo ... o hacer que venga ya adecuado ...
@@ -359,7 +361,7 @@ sub comprobar_propiedad_xml
 		$zip->overwrite();
 	}
 	
-	my $xp=XML::XPath->new (xml => $contenido);
+	my $xp=XML::XPath->new (xml => $contenido,parser => $parser);
 	my @nodos=$xp->findnodes($prop);
 	
 	if (scalar (@nodos) gt 1)
@@ -526,7 +528,7 @@ sub aplicar_cambio_xml
 		$contenido=convertir ("ISO8859-15","UTF-8",$zip->contents($fichero));
 	}
 
-	my $xp=XML::XPath->new (xml => $contenido);
+	my $xp=XML::XPath->new (xml => $contenido, parser => $parser);
 	my @nodos=$xp->findnodes($prop);
 	
 	if (scalar (@nodos) gt 1)
