@@ -22,7 +22,7 @@ use utf8;
 use strict;
 use warnings;
 
-my $parser=new XML::Parser ( ParseParamEnt => "no" );
+my $parser=new XML::Parser (  NoLWP => 1);
 
 # Opciones que se convierten en variables globales :(
 my $quietly="";
@@ -511,6 +511,17 @@ sub aplicar_cambios_xml
 	}
 }
 
+sub doctype
+{
+	my $contenido=shift;
+
+	if ( $contenido =~ /^(<!DOCTYPE[^>]*>)/ )
+	{
+		return $1;
+	}
+	return undef;
+}
+
 sub aplicar_cambio_xml
 {
 	my $zip=shift;
@@ -521,6 +532,9 @@ sub aplicar_cambio_xml
 	my $valor=$cambios->{$fichero}{valor}{$prop};
 
 	my $contenido=$zip->contents($fichero);
+	# Esto se tendría que optimizar, guardando el doctype de cada fichero al
+	# leer la configuración
+	my $doctype=doctype($contenido);
 
 	if (defined $cambios->{$fichero}{"ISO8859-15"})
 	{
@@ -549,7 +563,11 @@ sub aplicar_cambio_xml
 	{
 		debug "Dejamos el fichero $fichero como venía (con codificación ISO8859-15)\n";
 		$xml=convertir ("UTF-8","ISO8859-15",$xml);
-	}	
+	}
+	if (defined $doctype and $xml !~ /^<!DOCTYPE/)
+	{
+		$xml=$doctype."\n".$xml;
+	}
 	$zip->contents($fichero,$xml."\n");
 }
 
