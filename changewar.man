@@ -62,7 +62,7 @@
 .\" ========================================================================
 .\"
 .IX Title "CHANGEWAR 1"
-.TH CHANGEWAR 1 "2011-04-06" "perl v5.10.1" "User Contributed Perl Documentation"
+.TH CHANGEWAR 1 "2011-04-09" "perl v5.10.1" "User Contributed Perl Documentation"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -96,6 +96,16 @@ Usar un separador alternativo por defecto el separador es la coma (\*(L",\*(R").
 .SH "SINTAXIS DE CONFIGURACIÓN"
 .IX Header "SINTAXIS DE CONFIGURACIÓN"
 Las líneas que empiecen con almoadilla (\*(L"#\*(R") serán consideradas comentarios.
+.PP
+Existen dos formas de escribir el fichero de configuración:
+.PP
+1. [ /ruta/al/fichero ]
+propiedad01
+propiedad02
+.PP
+2. /ruta/al/fichero: propiedad01, propiedad02
+.PP
+No está permitido mezclar ambas formas. Hay dos tipos de ficheros que podemos modificar, los ficheros .properties y los .xml.
 .SS "\s-1FICHEROS\s0 .properties"
 .IX Subsection "FICHEROS .properties"
 # Configuración que copia la propiedad \*(L"prop\*(R" desde el fichero \*(L"fichero.properties\*(R" del origen.zip al mismo fichero dentro del destino.zip

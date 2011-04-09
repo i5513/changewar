@@ -119,59 +119,75 @@ sub es_utf8
 sub cargar_configuracion
 {
 	my $fichero=shift;
+	my $init=0;
 	my %conf;
 
 	open CONF, "<$fichero" || die "No puedo abrir $fichero";
 	while (<CONF>)
 	{
-		# Pasamos si es un comentario
-		next if (/^\s*#/);
-		if (/^([^:]*):(.+)$/)
+		my $definicion;
+		# Pasamos si es un comentario o línea vacia
+		next if (/^\s*#/ or /^\s*$/);
+		# init files
+		if (/^\s*\[\s*([^]\s]*)\s*\]\s*$/)
+		{
+			$fichero=$1;
+			$init=1;
+			next;
+		}
+		if ($init eq 1)
+		{
+			chomp;
+			$definicion=$_;			
+		}
+		# No permitimos configuraciones mixtas
+		if (/^([^:]*):(.+)$/ and $init eq 0)
 		{
 			debug "Procesando: $_";
-			my $fichero=$1;
-			my $definicion=$2;
-			$definicion=~s/\s*//g;
-			my @props=split ("$separador",$definicion);
-			if ($fichero =~ /.xml/)
+			$fichero=$1;
+			$definicion=$2;
+		}
+		$definicion=~s/\s*//g;
+		my @props=split ("$separador",$definicion);
+		@props=($definicion) if ($init eq 1);
+		if ($fichero =~ /.xml/)
+		{
+			foreach my $prop (@props)
 			{
-				foreach my $prop (@props)
+				if ($prop !~ /:=/)
 				{
-					if ($prop !~ /:=/)
+					$conf{$fichero}{copia}{$prop}="";
+				}
+				else
+				{
+					my ($p,$v) = ($prop =~ /^(.*):=(.*)$/);
+					if (es_iso8859_15 ($v))
 					{
-						$conf{$fichero}{copia}{$prop}="";
+						$v=convertir ("ISO8859-15","UTF-8",$v);
 					}
-					else
-					{
-						my ($p,$v) = ($prop =~ /^(.*):=(.*)$/);
-						if (es_iso8859_15 ($v))
-						{
-							$v=convertir ("ISO8859-15","UTF-8",$v);
-						}
-						$conf{$fichero}{valor}{$p}=$v;
-					}
+					$conf{$fichero}{valor}{$p}=$v;
 				}
 			}
-			elsif ($fichero =~ /.properties/)
+		}
+		elsif ($fichero =~ /.properties/)
+		{
+			foreach my $prop (@props)
 			{
-				foreach my $prop (@props)
+				# Podríamos añadir una syntaxis como propiedad/d 
+				# para eliminar la propiedad ...
+				if ($prop !~ /=/)
 				{
-					# Podríamos añadir una syntaxis como propiedad/d 
-					# para eliminar la propiedad ...
-					if ($prop !~ /=/)
+					#definimos la propiedad a copiar
+					$conf{$fichero}{copia}{$prop}="";
+				}
+				else
+				{
+					my ($p,$v) = ($prop =~ /^([^=]*)=(.*)$/);
+					if (es_iso8859_15 ($v))
 					{
-						#definimos la propiedad a copiar
-						$conf{$fichero}{copia}{$prop}="";
+						$v=convertir ("ISO8859-15","UTF-8",$v);
 					}
-					else
-					{
-						my ($p,$v) = ($prop =~ /^([^=]*)=(.*)$/);
-						if (es_iso8859_15 ($v))
-						{
-							$v=convertir ("ISO8859-15","UTF-8",$v);
-						}
-						$conf{$fichero}{valor}{$p}=$v;
-					}
+					$conf{$fichero}{valor}{$p}=$v;
 				}
 			}
 		}
@@ -692,6 +708,16 @@ Usar un separador alternativo por defecto el separador es la coma (",").
 =head1 SINTAXIS DE CONFIGURACIÓN
 
 Las líneas que empiecen con almoadilla ("#") serán consideradas comentarios.
+
+Existen dos formas de escribir el fichero de configuración:
+
+1. [ /ruta/al/fichero ]
+propiedad01
+propiedad02
+
+2. /ruta/al/fichero: propiedad01, propiedad02
+
+No está permitido mezclar ambas formas. Hay dos tipos de ficheros que podemos modificar, los ficheros .properties y los .xml.
 
 =head2 FICHEROS .properties
 
