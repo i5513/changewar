@@ -122,7 +122,7 @@ sub cargar_configuracion
 	my $init=0;
 	my %conf;
 
-	open CONF, "<$fichero" || die "No puedo abrir $fichero";
+	open CONF, "<$fichero" or die "No puedo abrir $fichero";
 	while (<CONF>)
 	{
 		my $definicion;
