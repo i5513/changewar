@@ -62,7 +62,7 @@
 .\" ========================================================================
 .\"
 .IX Title "CHANGEWAR 1"
-.TH CHANGEWAR 1 "2011-04-09" "perl v5.10.1" "User Contributed Perl Documentation"
+.TH CHANGEWAR 1 "2011-04-10" "perl v5.10.1" "User Contributed Perl Documentation"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -99,22 +99,51 @@ Las líneas que empiecen con almoadilla (\*(L"#\*(R") serán consideradas coment
 .PP
 Existen dos formas de escribir el fichero de configuración:
 .PP
-1. [ /ruta/al/fichero ]
+1. [ /ruta/al/fichero ] || [ \- /ruta/al/fichero/a/eliminar ] || [ + /ruta/al/fichero/a/añadir ] = fichero
 propiedad01
 propiedad02
 .PP
-2. /ruta/al/fichero: propiedad01, propiedad02
+2. /ruta/al/fichero: propiedad01, propiedad02 || \- /ruta/al/fichero/a/eliminar || + /ruta/al/fichero/a/añadir = fichero
 .PP
 No está permitido mezclar ambas formas. Hay dos tipos de ficheros que podemos modificar, los ficheros .properties y los .xml.
+.SS "Añadiendo o quitando ficheros"
+.IX Subsection "Añadiendo o quitando ficheros"
+# Para añadir un fichero
+.PP
++ruta/en/el/zip: ruta/en/local
+.PP
+o en modo .ini
+.PP
+[ + ruta/en/el/zip ] = ruta/en/local
+.PP
+# Para eliminar un fichero
+.PP
+\&\-ruta/en/el/zip
+.PP
+o en modo .ini
+.PP
+[ \- ruta/en/el/zip ]
 .SS "\s-1FICHEROS\s0 .properties"
 .IX Subsection "FICHEROS .properties"
 # Configuración que copia la propiedad \*(L"prop\*(R" desde el fichero \*(L"fichero.properties\*(R" del origen.zip al mismo fichero dentro del destino.zip
 .PP
 fichero.properties: prop
 .PP
+o en modo .ini
+.PP
+[ fichero.properties ]
+.PP
+prop
+.PP
 # Configuración que asigna el valor \*(L"val\*(R" a la propiedad \*(L"prop\*(R" en el fichero \*(L"fichero.properties\*(R" dentro del destino.zip
 .PP
 fichero.properties: prop=val
+.PP
+o en modo .ini
+.PP
+[ fichero.properties ]
+.PP
+prop=val
 .PP
 # Se pueden mezclar separando las asignaciones por coma:
 .PP
@@ -166,6 +195,8 @@ Si nos hemos confundido a la hora de escribir el nombre romano de Sevilla, así 
 andalucia.xml: //Provincia[@nombre=Sevilla]/@nombre_romano := hispalis
 .PP
 Si no asignamos valor a la propiedad ésta se copiará desde el fichero origen dentro de origen.zip
+.PP
+También se puede usar el modo .ini para estos cambios.
 .SH "BUGS"
 .IX Header "BUGS"
 El soporte a diferentes locales se haya limitado por la librería XML::XPath. Si el \s-1XML\s0 viene bien formado con su encoding correspondiente no habrá problema. Se ha hecho un apaño para que no den problemas los ficheros que vengan con carácteres \s-1ISO8859\-15\s0.
