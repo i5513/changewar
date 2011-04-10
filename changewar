@@ -264,11 +264,11 @@ sub copiar_configuracion
 	{
 		foreach my $prop (keys %{$conf->{mod}{$fichero}{copia}})
 		{
-			$copia{$fichero}{copia}{$prop}="";
+			$copia{mod}{$fichero}{copia}{$prop}="";
 		}
 		foreach my $prop (keys %{$conf->{mod}{$fichero}{valor}})
 		{
-			$copia{$fichero}{valor}{$prop}=$conf->{mod}{$fichero}{valor}{$prop};
+			$copia{mod}{$fichero}{valor}{$prop}=$conf->{mod}{$fichero}{valor}{$prop};
 		}
 	}
 	foreach my $fichero (keys %{$conf->{add}})
