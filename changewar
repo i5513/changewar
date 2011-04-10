@@ -10,15 +10,12 @@
 # propiedades.xml: minodo[@nombre="nombre"]@atributo:=miatributo
 # TODO:
 # poder comentar propiedades
-# eliminar ficheros
-# copiar ficheros
 use Archive::Zip qw( :ERROR_CODES :CONSTANTS );
 use XML::XPath;
 use XML::XPath::XMLParser;
 use XML::Parser;
 use Getopt::Long;
 use Text::Iconv;
-use utf8;
 use strict;
 use warnings;
 
@@ -119,7 +116,7 @@ sub es_utf8
 sub cargar_configuracion
 {
 	my $fichero=shift;
-	my $init=0;
+	my $ini=0;
 	my %conf;
 
 	open CONF, "<$fichero" or die "No puedo abrir $fichero";
@@ -128,35 +125,67 @@ sub cargar_configuracion
 		my $definicion;
 		# Pasamos si es un comentario o línea vacia
 		next if (/^\s*#/ or /^\s*$/);
-		# init files
-		if (/^\s*\[\s*([^]\s]*)\s*\]\s*$/)
+		# ini files
+		if (/^\s*\[\s*[^+]([^]\s]*)\s*\]\s*$/)
 		{
 			$fichero=$1;
-			$init=1;
+			$ini=1;
 			next;
 		}
-		if ($init eq 1)
+		# si es [ +fichero ] = /path/fichero , interpretamos que se añade un nuevo fichero al
+		# war
+		if (/^\s*\[\s*[+]\s*([^]\s]*)\s*\]\s*=\s*(.*)\s*$/)
+		{
+			$fichero=$1;
+			my $path=$2;
+			( -e $path ) or die "No encontramos $path. Salimos\n";
+			$conf{add}{$fichero}=$path;
+			next;
+		}
+		# si es [ -fichero ], se quita el fichero del war
+		if (/^\s*\[\s*[-]([^]\s]*)\s*\]\s*$/)
+		{
+			$fichero=$1;
+			$conf{del}{$fichero}=1;
+			next;
+			
+		}
+		if ($ini eq 1)
 		{
 			chomp;
 			$definicion=$_;			
 		}
 		# No permitimos configuraciones mixtas
-		if (/^([^:]*):(.+)$/ and $init eq 0)
+		if (/^([^:]*):(.+)$/ and $ini eq 0)
 		{
 			debug "Procesando: $_";
 			$fichero=$1;
 			$definicion=$2;
 		}
+		# +rutafichero_a_añadir=rutafichero
+		if (/^\s*\+\s*(.*)\s*=\s*(.*)\s*$/ and $ini eq 0)
+		{
+			$fichero=$1; my $path=$2;
+			( -e $path ) or die "No encontramos $path. Salimos\n";
+			$conf{add}{$fichero}=$path;
+			next
+		}
+		if (/^\s*-\s*(.*)\s*$/ and $ini eq 0)
+		{
+			$fichero=$1; 
+			$conf{del}{$fichero}=1;
+			next
+		}
 		$definicion=~s/\s*//g;
 		my @props=split ("$separador",$definicion);
-		@props=($definicion) if ($init eq 1);
+		@props=($definicion) if ($ini eq 1);
 		if ($fichero =~ /.xml/)
 		{
 			foreach my $prop (@props)
 			{
 				if ($prop !~ /:=/)
 				{
-					$conf{$fichero}{copia}{$prop}="";
+					$conf{mod}{$fichero}{copia}{$prop}="";
 				}
 				else
 				{
@@ -165,7 +194,7 @@ sub cargar_configuracion
 					{
 						$v=convertir ("ISO8859-15","UTF-8",$v);
 					}
-					$conf{$fichero}{valor}{$p}=$v;
+					$conf{mod}{$fichero}{valor}{$p}=$v;
 				}
 			}
 		}
@@ -178,7 +207,7 @@ sub cargar_configuracion
 				if ($prop !~ /=/)
 				{
 					#definimos la propiedad a copiar
-					$conf{$fichero}{copia}{$prop}="";
+					$conf{mod}{$fichero}{copia}{$prop}="";
 				}
 				else
 				{
@@ -187,7 +216,7 @@ sub cargar_configuracion
 					{
 						$v=convertir ("ISO8859-15","UTF-8",$v);
 					}
-					$conf{$fichero}{valor}{$p}=$v;
+					$conf{mod}{$fichero}{valor}{$p}=$v;
 				}
 			}
 		}
@@ -199,19 +228,30 @@ sub imprimir_configuracion
 {
 	my $conf=shift;
 	
-	foreach my $fichero (keys %{$conf})
+	foreach my $fichero (keys %{$conf->{mod}})
 	{
 		debug "Fichero: $fichero:\n";
 		debug "Propiedades a copiar:\n";
-		foreach my $prop (keys %{$conf->{$fichero}{copia}})
+		foreach my $prop (keys %{$conf->{mod}{$fichero}{copia}})
 		{
 			debug "* $prop\n";
 		}
 		debug "Propiedades a asignar:\n";
-		foreach my $prop (keys %{$conf->{$fichero}{valor}})
+		foreach my $prop (keys %{$conf->{mod}{$fichero}{valor}})
 		{
-			debug "* $prop = $conf->{$fichero}{valor}{$prop}\n";
+			debug "* $prop = $conf->{mod}{$fichero}{valor}{$prop}\n";
 		}
+		
+	}
+	debug "Ficheros a añadir:\n" if (keys %{$conf->{add}} gt 0);
+	foreach my $fichero (keys %{$conf->{add}})
+	{
+		debug "$fichero = $conf->{add}{$fichero}\n";
+	}
+	debug "Ficheros a eliminar:\n" if (keys %{$conf->{del}} gt 0);
+	foreach my $fichero (keys %{$conf->{del}})
+	{
+		debug "$fichero\n";
 	}
 }
 
@@ -220,16 +260,24 @@ sub copiar_configuracion
 	my $conf=shift;
 	my %copia;
 	
-	foreach my $fichero (keys %{$conf})
+	foreach my $fichero (keys %{$conf->{mod}})
 	{
-		foreach my $prop (keys %{$conf->{$fichero}{copia}})
+		foreach my $prop (keys %{$conf->{mod}{$fichero}{copia}})
 		{
 			$copia{$fichero}{copia}{$prop}="";
 		}
-		foreach my $prop (keys %{$conf->{$fichero}{valor}})
+		foreach my $prop (keys %{$conf->{mod}{$fichero}{valor}})
 		{
-			$copia{$fichero}{valor}{$prop}=$conf->{$fichero}{valor}{$prop};
+			$copia{$fichero}{valor}{$prop}=$conf->{mod}{$fichero}{valor}{$prop};
 		}
+	}
+	foreach my $fichero (keys %{$conf->{add}})
+	{
+		$copia{add}{$fichero}=$conf->{add}{$fichero};
+	}
+	foreach my $fichero (keys %{$conf->{del}})
+	{
+		$copia{del}{$fichero}=1;
 	}
 	return %copia;
 }
@@ -243,16 +291,16 @@ sub procesar_propiedades_properties
 	my $cambios=shift;
 
 	debug "Propiedades de $fichero\n";
-	foreach my $prop (keys %{$conf->{$fichero}{copia}})
+	foreach my $prop (keys %{$conf->{mod}{$fichero}{copia}})
 	{
-		my ($valor) = ($fichero_origen =~ /^\s*$prop\s*=(.*)$/m);
+		my ($valor) = ($fichero_origen =~ /^\s*$prop\s*=\s*(.*)\s*$/m);
 		if (not defined ($valor))
 		{
 			debug "FALLO en $prop (no existe en $fichero), Contenido del fichero $fichero:\n ($fichero_origen)\n";
 			exit (1);
 		}
-		$cambios->{$fichero}{valor}{$prop}=$valor;
-		delete $cambios->{$fichero}{copia}{$prop};
+		$cambios->{mod}{$fichero}{valor}{$prop}=$valor;
+		delete $cambios->{mod}{$fichero}{copia}{$prop};
 	}
 }
 
@@ -264,14 +312,14 @@ sub procesar_propiedades_xml
 	my $cambios=shift;
 
 	my $contenido=$zip->contents($fichero);
-	if (defined $cambios->{$fichero}{"ISO8859-15"})
+	if (defined $cambios->{mod}{$fichero}{"ISO8859-15"})
 	{
 		debug "Convirtiendo $fichero a UTF-8 ...\n";
 		$contenido=convertir ("ISO8859-15","UTF-8",$zip->contents($fichero));
 	}
 
 	my $xp = XML::XPath->new (xml => $contenido,parser => $parser);
-	foreach my $prop (keys %{$conf->{$fichero}{copia}})
+	foreach my $prop (keys %{$conf->{mod}{$fichero}{copia}})
 	{
 		# Habría que ver qué tiene prop y adecuarlo ... o hacer que venga ya adecuado ...
 		my @nodos=$xp->findnodes($prop);
@@ -291,8 +339,8 @@ sub procesar_propiedades_xml
 			die "FALLO en $prop. No se encuentra ese XPATH en $fichero:\n".
 			" ($contenido)\n REVISA SALIDA DE LOGS (fallo en $fichero:$prop)\n";
 		}
-		$cambios->{$fichero}{valor}{$prop}=$valor;
-		delete  $cambios->{$fichero}{copia}{$prop};
+		$cambios->{mod}{$fichero}{valor}{$prop}=$valor;
+		delete  $cambios->{mod}{$fichero}{copia}{$prop};
 				
 	}
 }
@@ -329,7 +377,7 @@ sub recoger_info
               die "No puedo leer fichero origen $origen";
         }
 		
-	foreach my $fichero (keys %{$conf})
+	foreach my $fichero (keys %{$conf->{mod}})
 	{
 		if (defined ($zip->memberNamed($fichero)))
 		{
@@ -338,12 +386,12 @@ sub recoger_info
 			if (es_iso8859_15 ($contenido))
 			{
 				$encoding="ISO8859-15";
-				$cambios{$fichero}{"ISO8859-15"}=1;
+				$cambios{mod}{$fichero}{"ISO8859-15"}=1;
 			}
 			elsif (es_utf8 ($contenido))
 			{
 				$encoding="UTF-8";
-				$cambios{$fichero}{"UTF-8"}=1;
+				$cambios{mod}{$fichero}{"UTF-8"}=1;
 			}
 			else
 			{
@@ -355,6 +403,24 @@ sub recoger_info
 		else
 		{
 			debug "Falla fichero $fichero\n";
+		}
+	}
+	foreach my $fichero (keys %{$conf->{add}})
+	{
+		if (defined ($zip->memberNamed($fichero)))
+		{
+			debug "$fichero ya existe en fichero origne $origen.".
+			"(Reemplazar no implementado). Salimos\n";
+			exit 1;
+		}
+	}
+	foreach my $fichero (keys %{$conf->{del}})
+	{
+		if (not defined ($zip->memberNamed($fichero)))
+		{
+			debug "$fichero (al que ibamos a eliminar) no existe en fichero".
+			"origen $origen. (Reemplazar no implementado). Salimos\n";
+			exit 1;
 		}
 	}
 	return %cambios;
@@ -445,7 +511,7 @@ sub comprobar_cambios_fichero
               die "No puedo leer fichero destino $destino";
         }
 
-	my @propiedades=keys %{$cambios->{$fichero}{valor}};
+	my @propiedades=keys %{$cambios->{mod}{$fichero}{valor}};
 	foreach my $prop (@propiedades)
 	{
 		debug "Comprobando $destino, $fichero, $prop ....\n";
@@ -459,11 +525,12 @@ sub comprobar_cambios
 	my $destino=shift;
 
 	debug "Comprobando cambios ...\n";
-	foreach my $fichero (keys %{$cambios})
+	foreach my $fichero (keys %{$cambios->{mod}})
 	{
 		if (defined $cambios->{$fichero}{copia})
 		{
-			die "No se pudieron copiar todos los campos (ESTO NO DEBERIA SALIR)." if (keys %{$cambios->{$fichero}{copia}} gt 0);
+			die "No se pudieron copiar todos los campos (ESTO NO DEBERIA".
+			"SALIR).\n" if (keys %{$cambios->{mod}{$fichero}{copia}} gt 0);
 			comprobar_cambios_fichero ($destino, $fichero, $cambios);
 		}
 	}
@@ -492,10 +559,10 @@ sub aplicar_cambios_properties
 	my $fichero=shift;
 	my $cambios=shift;
 	
-	foreach my $prop (keys %{$cambios->{$fichero}{valor}})
+	foreach my $prop (keys %{$cambios->{mod}{$fichero}{valor}})
 	{
-		debug  "Aplicando cambio $fichero, $prop, $cambios->{$fichero}{valor}{$prop}\n";
-		aplicar_cambio_properties ($zip, $fichero, $prop, $cambios->{$fichero}{valor}{$prop}) if (not $dryrun);
+		debug  "Aplicando cambio $fichero, $prop, $cambios->{mod}{$fichero}{valor}{$prop}\n";
+		aplicar_cambio_properties ($zip, $fichero, $prop, $cambios->{mod}{$fichero}{valor}{$prop}) if (not $dryrun);
 	}
 }
 
@@ -520,9 +587,9 @@ sub aplicar_cambios_xml
 	my $fichero=shift;
 	my $cambios=shift;
 
-	foreach my $prop (keys %{$cambios->{$fichero}{valor}})
+	foreach my $prop (keys %{$cambios->{mod}{$fichero}{valor}})
 	{
-		debug "Aplicando cambio xml ,$fichero, $prop, $cambios->{$fichero}{valor}{$prop}\n";
+		debug "Aplicando cambio xml ,$fichero, $prop, $cambios->{mod}{$fichero}{valor}{$prop}\n";
 		aplicar_cambio_xml ($zip, $fichero, $prop, $cambios) if (not $dryrun);
 	}
 }
@@ -545,14 +612,14 @@ sub aplicar_cambio_xml
 	my $prop=shift;
 	my $cambios=shift;
 
-	my $valor=$cambios->{$fichero}{valor}{$prop};
+	my $valor=$cambios->{mod}{$fichero}{valor}{$prop};
 
 	my $contenido=$zip->contents($fichero);
 	# Esto se tendría que optimizar, guardando el doctype de cada fichero al
 	# leer la configuración
 	my $doctype=doctype($contenido);
 
-	if (defined $cambios->{$fichero}{"ISO8859-15"})
+	if (defined $cambios->{mod}{$fichero}{"ISO8859-15"})
 	{
 		debug "Convirtiendo $fichero de ISO8859-15 a UTF-8\n";
 		$contenido=convertir ("ISO8859-15","UTF-8",$zip->contents($fichero));
@@ -575,7 +642,7 @@ sub aplicar_cambio_xml
 	my $xml=$xp->findnodes_as_string("/");
 	# Bug 66780 en rt.cpan.org
 	$xml =~ s/-->(.)/-->\n$1/m if ($xml =~ /^<!--/);
-	if (defined $cambios->{$fichero}{"ISO8859-15"})
+	if (defined $cambios->{mod}{$fichero}{"ISO8859-15"})
 	{
 		debug "Dejamos el fichero $fichero como venía (con codificación ISO8859-15)\n";
 		$xml=convertir ("UTF-8","ISO8859-15",$xml);
@@ -598,9 +665,24 @@ sub aplicar_cambios
         }
 	debug "Aplicando cambios ... \n";
 
-	foreach my $fichero (keys %{$cambios})
+	foreach my $fichero (keys %{$cambios->{mod}})
 	{
 		aplicar_cambios_fichero ($zip, $fichero, $cambios); 
+	}
+	foreach my $fichero (keys %{$cambios->{add}})
+	{
+		if (defined $zip->memberNamed($fichero))
+		{
+			$zip->removeMember($fichero);
+		}
+		$zip->addFile($cambios->{add}{$fichero}, $fichero);
+	}
+	foreach my $fichero (keys %{$cambios->{del}})
+	{
+		if (defined $zip->memberNamed($fichero))
+		{
+			$zip->removeMember ($fichero);
+		}
 	}
 	$zip->overwrite() if (not $dryrun);
 }
@@ -621,13 +703,21 @@ sub escribir_ficheros_modificados
 	{
 		die "No puedo leer origen para obtener ficheros origen";
 	}
-	foreach my $fichero (keys %{$cambios})
+	foreach my $fichero (keys %{$cambios->{mod}})
 	{
 		debug "Descomprimiendo $fichero\n";
 		my $nombre=$fichero;
 		$nombre=~ s,^.*/,,;
 		$zip_origen->extractMemberWithoutPaths($fichero,"tmp-$destino/$nombre-origen");
 		$zip_destino->extractMemberWithoutPaths($fichero,"tmp-$destino/$nombre-destino");
+	}
+	foreach my $fichero (keys %{$cambios->{add}})
+	{
+		debug "Fichero añadido: $fichero";
+	}
+	foreach my $fichero (keys %{$cambios->{del}})
+	{
+		debug "Fichero eliminado: $fichero";
 	}
 }
 
@@ -711,13 +801,31 @@ Las líneas que empiecen con almoadilla ("#") serán consideradas comentarios.
 
 Existen dos formas de escribir el fichero de configuración:
 
-1. [ /ruta/al/fichero ]
+1. [ /ruta/al/fichero ] || [ - /ruta/al/fichero/a/eliminar ] || [ + /ruta/al/fichero/a/añadir ] = fichero
 propiedad01
 propiedad02
 
-2. /ruta/al/fichero: propiedad01, propiedad02
+2. /ruta/al/fichero: propiedad01, propiedad02 || - /ruta/al/fichero/a/eliminar || + /ruta/al/fichero/a/añadir = fichero 
 
 No está permitido mezclar ambas formas. Hay dos tipos de ficheros que podemos modificar, los ficheros .properties y los .xml.
+
+=head2 Añadiendo o quitando ficheros
+
+# Para añadir un fichero
+
++ruta/en/el/zip: ruta/en/local
+
+o en modo .ini
+
+[ + ruta/en/el/zip ] = ruta/en/local
+
+# Para eliminar un fichero
+
+-ruta/en/el/zip
+
+o en modo .ini
+
+[ - ruta/en/el/zip ]
 
 =head2 FICHEROS .properties
 
@@ -725,9 +833,21 @@ No está permitido mezclar ambas formas. Hay dos tipos de ficheros que podemos m
 
 fichero.properties: prop
 
+o en modo .ini
+
+[ fichero.properties ]
+
+prop
+
 # Configuración que asigna el valor "val" a la propiedad "prop" en el fichero "fichero.properties" dentro del destino.zip
 
 fichero.properties: prop=val
+
+o en modo .ini
+
+[ fichero.properties ]
+
+prop=val
 
 # Se pueden mezclar separando las asignaciones por coma:
 
@@ -780,6 +900,8 @@ Si nos hemos confundido a la hora de escribir el nombre romano de Sevilla, así 
 andalucia.xml: //Provincia[@nombre=Sevilla]/@nombre_romano := hispalis
 
 Si no asignamos valor a la propiedad ésta se copiará desde el fichero origen dentro de origen.zip
+
+También se puede usar el modo .ini para estos cambios.
 
 =head1 BUGS
 
