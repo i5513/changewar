@@ -126,20 +126,22 @@ sub cargar_configuracion
 		# Pasamos si es un comentario o línea vacia
 		next if (/^\s*#/ or /^\s*$/);
 		# ini files
-		if (/^\s*\[\s*[^+]([^]\s]*)\s*\]\s*$/)
-		{
-			$fichero=$1;
-			$ini=1;
-			next;
-		}
-		# si es [ +fichero ] = /path/fichero , interpretamos que se añade un nuevo fichero al
-		# war
+		# si es [ +fichero ] = /path/fichero , añadimos
 		if (/^\s*\[\s*[+]\s*([^]\s]*)\s*\]\s*=\s*(.*)\s*$/)
 		{
 			$fichero=$1;
 			my $path=$2;
-			( -e $path ) or die "No encontramos $path. Salimos\n";
+			( -e $path ) or die "No encontramos $path ($_). Salimos\n";
 			$conf{add}{$fichero}=$path;
+			next;
+		}
+		# Si es [ fichero ] = /path/fichero, reemplazamos
+		if (/^\s*\[\s*([^]\s]*)\s*\]\s*=\s*(.*)\s*$/)
+		{
+			$fichero=$1;
+			my $path=$2;
+			( -e $path ) or die "No encontramos $path ($_). Salimos\n";
+			$conf{replace}{$fichero}=$path;
 			next;
 		}
 		# si es [ -fichero ], se quita el fichero del war
@@ -149,6 +151,35 @@ sub cargar_configuracion
 			$conf{del}{$fichero}=1;
 			next;
 			
+		}
+		if (/^\s*\[\s*([^]\s]*)\s*\]\s*$/)
+		{
+			$fichero=$1;
+			$ini=1;
+			next;
+		}
+		# +rutafichero_a_añadir=rutafichero
+		if (/^\s*\+\s*(.*)\s*=\s*(.*)\s*$/ and $ini eq 0)
+		{
+			$fichero=$1; my $path=$2;
+			( -e $path ) or die "No encontramos $path ($_). Salimos\n";
+			$conf{add}{$fichero}=$path;
+			next
+		}
+		# rutafichero_a_reemplazar=rutafichero
+		if (/^\s*\s*([^:\s]*)\s*=\s*(.*)\s*$/ and $ini eq 0)
+		{
+			$fichero=$1; my $path=$2;
+			( -e $path ) or die "No encontramos $path ($_). Salimos\n";
+			$conf{replace}{$fichero}=$path;
+			next
+		}
+		# -rutafichero_a_añadir , eliminamos el fichero
+		if (/^\s*-\s*(.*)\s*$/ and $ini eq 0)
+		{
+			$fichero=$1; 
+			$conf{del}{$fichero}=1;
+			next
 		}
 		if ($ini eq 1)
 		{
@@ -162,20 +193,7 @@ sub cargar_configuracion
 			$fichero=$1;
 			$definicion=$2;
 		}
-		# +rutafichero_a_añadir=rutafichero
-		if (/^\s*\+\s*(.*)\s*=\s*(.*)\s*$/ and $ini eq 0)
-		{
-			$fichero=$1; my $path=$2;
-			( -e $path ) or die "No encontramos $path. Salimos\n";
-			$conf{add}{$fichero}=$path;
-			next
-		}
-		if (/^\s*-\s*(.*)\s*$/ and $ini eq 0)
-		{
-			$fichero=$1; 
-			$conf{del}{$fichero}=1;
-			next
-		}
+
 		$definicion=~s/\s*//g;
 		my @props=split ("$separador",$definicion);
 		@props=($definicion) if ($ini eq 1);
@@ -248,6 +266,11 @@ sub imprimir_configuracion
 	{
 		debug "$fichero = $conf->{add}{$fichero}\n";
 	}
+	debug "Ficheros a reemplazar:\n" if (keys %{$conf->{replace}} gt 0);
+	foreach my $fichero (keys %{$conf->{replace}})
+	{
+		debug "$fichero = $conf->{replace}{$fichero}\n";
+	}
 	debug "Ficheros a eliminar:\n" if (keys %{$conf->{del}} gt 0);
 	foreach my $fichero (keys %{$conf->{del}})
 	{
@@ -274,6 +297,10 @@ sub copiar_configuracion
 	foreach my $fichero (keys %{$conf->{add}})
 	{
 		$copia{add}{$fichero}=$conf->{add}{$fichero};
+	}
+	foreach my $fichero (keys %{$conf->{replace}})
+	{
+		$copia{replace}{$fichero}=$conf->{replace}{$fichero};
 	}
 	foreach my $fichero (keys %{$conf->{del}})
 	{
@@ -403,14 +430,24 @@ sub recoger_info
 		else
 		{
 			debug "Falla fichero $fichero\n";
+			exit (1);
 		}
 	}
 	foreach my $fichero (keys %{$conf->{add}})
 	{
 		if (defined ($zip->memberNamed($fichero)))
 		{
-			debug "$fichero ya existe en fichero origne $origen.".
-			"(Reemplazar no implementado). Salimos\n";
+			debug "$fichero ya existe en fichero origen $origen.".
+			" Salimos\n";
+			exit 1;
+		}
+	}
+	foreach my $fichero (keys %{$conf->{replace}})
+	{
+		if (not defined ($zip->memberNamed($fichero)))
+		{
+			debug "\"$fichero\" (al que ibamos a reemplazar) no existe en fichero origen $origen".
+			" Salimos\n";
 			exit 1;
 		}
 	}
@@ -419,7 +456,7 @@ sub recoger_info
 		if (not defined ($zip->memberNamed($fichero)))
 		{
 			debug "$fichero (al que ibamos a eliminar) no existe en fichero".
-			"origen $origen. (Reemplazar no implementado). Salimos\n";
+			"origen $origen. Salimos\n";
 			exit 1;
 		}
 	}
@@ -671,14 +708,25 @@ sub aplicar_cambios
 	}
 	foreach my $fichero (keys %{$cambios->{add}})
 	{
+		debug "Añadiendo $fichero ...\n";
 		if (defined $zip->memberNamed($fichero))
 		{
 			$zip->removeMember($fichero);
 		}
 		$zip->addFile($cambios->{add}{$fichero}, $fichero);
 	}
+	foreach my $fichero (keys %{$cambios->{replace}})
+	{
+		debug "Reemplazando $fichero ...\n";
+		if (defined $zip->memberNamed($fichero))
+		{
+			$zip->removeMember($fichero);
+		}
+		$zip->addFile($cambios->{replace}{$fichero}, $fichero);
+	}
 	foreach my $fichero (keys %{$cambios->{del}})
 	{
+		debug "Eliminando $fichero ...\n";
 		if (defined $zip->memberNamed($fichero))
 		{
 			$zip->removeMember ($fichero);
@@ -714,6 +762,10 @@ sub escribir_ficheros_modificados
 	foreach my $fichero (keys %{$cambios->{add}})
 	{
 		debug "Fichero añadido: $fichero";
+	}
+	foreach my $fichero (keys %{$cambios->{replace}})
+	{
+		debug "Fichero reemplazado: $fichero => $cambios->{replace}{$fichero}";
 	}
 	foreach my $fichero (keys %{$cambios->{del}})
 	{
