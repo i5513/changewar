@@ -18,6 +18,7 @@ use Getopt::Long;
 use Text::Iconv;
 use strict;
 use warnings;
+use utf8;
 
 my $parser=new XML::Parser (  NoLWP => 1);
 
@@ -29,7 +30,10 @@ my $separador=",";
 
 sub debug
 {
-	printf STDERR "@_" if (not $quietly);
+	my $msg="@_";
+	
+	utf8::encode($msg);
+	printf STDERR "$msg" if (not $quietly);
 }
 
 sub ayuda
@@ -474,7 +478,7 @@ sub comprobar_propiedad_xml
 	# No nos llega los cambios aquí ....
 	if (es_iso8859_15 ($contenido))
 	{
-		debug "Convirtiendo $fichero en fichero destino de iso8859-15 a utf8";
+		debug "Convirtiendo $fichero en fichero destino de iso8859-15 a utf8\n";
 		$contenido=convertir ("ISO8859-15","UTF-8",$contenido);
 		$zip->contents($fichero,$contenido);
 		$zip->overwrite();
@@ -564,7 +568,7 @@ sub comprobar_cambios
 	debug "Comprobando cambios ...\n";
 	foreach my $fichero (keys %{$cambios->{mod}})
 	{
-		if (defined $cambios->{$fichero}{copia})
+		if (defined $cambios->{mod}{$fichero}{copia})
 		{
 			die "No se pudieron copiar todos los campos (ESTO NO DEBERIA".
 			"SALIR).\n" if (keys %{$cambios->{mod}{$fichero}{copia}} gt 0);
@@ -626,7 +630,7 @@ sub aplicar_cambios_xml
 
 	foreach my $prop (keys %{$cambios->{mod}{$fichero}{valor}})
 	{
-		debug "Aplicando cambio xml ,$fichero, $prop, $cambios->{mod}{$fichero}{valor}{$prop}\n";
+		debug "Aplicando cambio xml, $fichero, $prop, $cambios->{mod}{$fichero}{valor}{$prop}\n";
 		aplicar_cambio_xml ($zip, $fichero, $prop, $cambios) if (not $dryrun);
 	}
 }
@@ -677,6 +681,20 @@ sub aplicar_cambio_xml
 	}
 	$xp->setNodeText ($prop,$valor);
 	my $xml=$xp->findnodes_as_string("/");
+	if (es_iso8859_15 ($xml))
+	{
+		debug "OJO QUE xml de $fichero es iso8859-15\n";
+	}
+	elsif  (es_utf8 ($xml))
+	{
+		debug "xml de $fichero es UTF-8\n";
+	}
+	else
+	{
+		debug "xml de $fichero sin codificacion!! => forzamos a utf8. Algo va mal, pero posiblemente lo estemos haciendo bien. Pasarnos a XML::LibXML\n";
+		# Locura:
+		utf8::encode($xml);
+	}
 	# Bug 66780 en rt.cpan.org
 	$xml =~ s/-->(.)/-->\n$1/m if ($xml =~ /^<!--/);
 	if (defined $cambios->{mod}{$fichero}{"ISO8859-15"})
